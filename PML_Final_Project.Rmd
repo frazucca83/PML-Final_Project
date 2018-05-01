@@ -1,0 +1,186 @@
+---
+title: "PML Final Project"
+author: "Francesco Zuccarello"
+date: "4/30/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This is the R Markdown file for the final project of Practical Machine Learning by Jeff Leek and the Data Science Track Team. 
+
+The dataset used for this project refers to the study of Velloso et al. (2013)^[Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.]. As per description of the authors^[See <http://groupware.les.inf.puc-rio.br/har> Weight Lifting Exercises Dataset for more information.]: "in this study, six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E)."
+
+The aim of this project is to build a model to predict the manner in which the six people did the exercise, i.e., to predict the class.
+
+The training dataset used for this project is available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test dataset is available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+## Loading the Data
+
+```{r}
+library(ggplot2)
+library(caret)
+library(dplyr)
+
+training1 <- read.csv("pml-training.csv")
+testing1  <- read.csv("pml-testing.csv")
+```
+
+## Exploratory Data Analysis 
+
+Firstly, we note that although both the training and the testing datasets have the same number of columns, not all columns have the same names: 
+
+```{r}
+sum(names(training1) == names(testing1))
+```
+
+The columns that differ are:
+
+```{r}
+ names(training1)[(names(training1) != names(testing1))]
+ names(testing1)[(names(training1) != names(testing1))]
+```
+
+"classe"" will be our dependent variable for the training and the variable that we want to predict, so will be "excluded" in any case. The problem_id variable will not be used by the model.
+
+Since the provided testing dataset does not contain the "classe" variable, in order to test the model before applying it for the 20 predictions required for the Quiz we divide the training1 dataset in a training dataset and testing dataset. 
+
+```{r}
+set.seed(1234)
+
+inTrain = createDataPartition(training1$classe, p = 0.8)[[1]]
+
+training = training1[ inTrain,]
+testing  = training1[-inTrain,]
+```
+
+A quick look at the datasets reveals that many NAs values are present. For this study we adopt the following approach. 
+We first remove all columns from the training  dataset where at least half of the rows contain NAs:
+
+```{r}
+a <- colSums(is.na(training))<nrow(training)/2
+
+training <-  training %>%  
+         select(names(training)[a])
+str(training)
+```
+
+This leaves us with a dataset with:
+```{r}
+ncol(training)
+```
+
+columns for the training. This operations has also the nice consequence that no NAs are present any more in the dataset. In fact, 
+
+```{r}
+sum(is.na(training))
+
+```
+
+However, we still have variables that are factors and should be numerical. In particular, several have "#DIV/0!" as a level. 
+Therefore, our second step is to remove these variables:
+
+```{r}
+a <- colSums(training == "#DIV/0!") == 0
+training <- training %>%  
+         select(names(training)[a])
+str(training)
+```
+
+We note that the remaining columns are the exact columns (apart form the classe and problem_id) of the original testing dataset (after the columns that contain only NAs are removed). 
+
+```{r}
+a <- colSums(is.na(testing1))<nrow(testing1)/2
+
+tmp <-  testing1 %>%  
+         select(names(testing1)[a])
+names(training)[(names(training) != names(tmp))]
+names(tmp)[(names(training) != names(tmp))]
+```
+
+Finally, the first 5 variables are likely not to be relevant for the analysis because they contain information not related to the activity that we want top predict. Therefore, we will remove them:
+
+```{r}
+training <-  training %>% 
+             select( -X, -user_name, -raw_timestamp_part_1,
+                     -raw_timestamp_part_2, -cvtd_timestamp
+                     )
+str(training)
+```
+This leaves us with 
+
+```{r}
+ncol(training)
+```
+columns, the last of which is our dependent variable. 
+
+
+## Model development 
+
+Since the aim is to execute 20 "correct" predictions, we want to maximise the accuracy of the model. To this purpose we develop a Random Forest (rf) model using a 10-fold cross validation approach to select the best model. 
+
+```{r}
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+fitControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+
+modelFit <- train(classe~., data = training, method = "rf", preProcess = c("center", "scale"), trControl = fitControl )
+
+save(modelFit, file = "modelFit_PML_Final_Project.rda")
+#load("modelFit_PML_Final_Project.rda")
+
+stopCluster(cluster)
+registerDoSEQ()
+
+plot(modelFit$finalModel, main = "Model Error")
+print(modelFit$finalModel)
+
+```
+
+The above plot and model summary show that the out-of-bag (an estimate of the out of sample error) for this model is about 0.17%. This gives an estimated accuracy of 99.8%. 
+Let's now apply the model to the testing dataset that was built starting from the training1 dataset. 
+
+```{r}
+confusionMatrix(testing$classe, predict(modelFit, testing))
+```
+
+For this testing case the accuracy is 0.9975. 
+
+The predicted class for the original testing dataset are as follow:
+
+```{r}
+(predict(modelFit, testing1))
+```
+
+## Conclusion
+
+We have developed a model for classifying "how well"  Unilateral Dumbbell Biceps Curl are executed starting from a set of measurements of the different activities. The model used a Random Forest algorithm combined with a 10-fold cross validation. Ee have achieved an estimated out of sample (out-of-bag) error of 0.17%. We tested the model on a testing dataset and achieved an accuracy of 0.9975 (95% CI: 0.9953, 0.9988). 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
